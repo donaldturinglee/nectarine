@@ -78,7 +78,7 @@ private:
 		if(bytes_received <= 0) {
 			return;
 		}
-		std::string response;
+		std::string response = "+PONG\r\n";
 		send(socket_client, response.c_str(), response.size(), 0);
 		close(socket_client);
 	}
