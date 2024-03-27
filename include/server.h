@@ -10,15 +10,18 @@
 #include <iostream>
 #include <string>
 #include <cstring>
+#include <thread>
+#include <sys/epoll.h>
 
 #define ISVALIDSOCKET(s) ((s) >= 0)
-#define SOCKET int
+
+constexpr int MAX_EVENTS = 10;
 
 namespace nectarine {
 
 class Server {
 public:
-	Server(SOCKET port) : port_(port) {}
+	Server(int port) : port_(port) {}
 	~Server() {
 		close(socket_server_);
 	}
@@ -30,7 +33,8 @@ public:
 	}
 private:
 	int port_;
-	SOCKET socket_server_;
+	int socket_server_;
+	int epoll_fd_;
 	
 	void create_socket() {
 		socket_server_ = socket(AF_INET, SOCK_STREAM, 0);
@@ -65,16 +69,55 @@ private:
 	}
 
 	void accept_connections() {
+		epoll_fd_ = epoll_create1(0);
+		if(epoll_fd_ == -1) {
+			std::cerr << "Failed to create epoll instance.\n";
+			return;
+		}
+		struct epoll_event event;
+		struct epoll_event events[MAX_EVENTS];
+		event.events = EPOLLIN;
+		event.data.fd = socket_server_;
+		if(epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, socket_server_, &event) == -1) {
+			std::cerr << "Failed to add server socket to epoll instance.\n";
+			return;
+		}
+		std::cout << "Server started. Listening on port " << port_ << "\n";
 		struct sockaddr_storage client_addr;
 		socklen_t client_len = sizeof(client_addr);
-		std::cout << "Waiting for a client to connect...\n";
 		while(true) {
-			SOCKET socket_client = accept(socket_server_, (struct sockaddr*) &client_addr, &client_len);
-			if(socket_client == -1) {
-				std::cerr << "accept() failed.\n";
-				continue;
+			int num_events = epoll_wait(epoll_fd_, events, MAX_EVENTS, -1);
+			if(num_events == -1) {
+				std::cerr << "Failed to wait for events.\n";
+				break;
 			}
-			handle_connection(socket_client);
+			for(int i = 0; i < num_events; ++i) {
+				if(events[i].data.fd == socket_server_) {
+					struct sockaddr_storage client_addr;
+					socklen_t client_len = sizeof(client_addr);
+					int socket_client = accept(socket_server_, (struct sockaddr*) &client_addr, &client_len);
+					if(socket_client == -1) {
+						std::cerr << "Failed to accept client connection.\n";
+						continue;
+					}
+					event.events = EPOLLIN;
+					event.data.fd = socket_client;
+					if(epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, socket_client, &event) == -1) {
+						std::cerr << "Failed to add client socket to epoll instance.\n";
+						continue;
+					}
+					std::thread t([this](int socket_client){
+						this->handle_connection(socket_client);
+					}, socket_client);
+					t.detach();
+				} else {
+					int socket_client = events[i].data.fd;
+					std::thread t([this](int socket_client){
+						this->handle_connection(socket_client);
+					}, socket_client);
+					t.detach();
+				}
+			}
 		}
 	}
 
@@ -92,6 +135,7 @@ private:
 		}
 		close(socket_client);
 	}
+
 };
 
 } // namespace nectarine
