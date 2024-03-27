@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <iostream>
 #include <string>
+#include <cstring>
 
 #define ISVALIDSOCKET(s) ((s) >= 0)
 #define SOCKET int
@@ -40,6 +41,11 @@ private:
 	}
 	
 	void bind_socket() {
+		int option = 1;
+		if(setsockopt(socket_server_, SOL_SOCKET, SO_REUSEPORT, &option, sizeof(option)) < 0) {
+			std::cerr << "setsockopt() failed.\n";
+			return;
+		}
 		struct sockaddr_in server_addr;
 		server_addr.sin_family = AF_INET;
 		server_addr.sin_addr.s_addr = INADDR_ANY;
@@ -64,9 +70,9 @@ private:
 		std::cout << "Waiting for a client to connect...\n";
 		while(true) {
 			SOCKET socket_client = accept(socket_server_, (struct sockaddr*) &client_addr, &client_len);
-			if(socket_client < 0) {
+			if(socket_client == -1) {
 				std::cerr << "accept() failed.\n";
-				break;
+				continue;
 			}
 			handle_connection(socket_client);
 		}
@@ -74,12 +80,16 @@ private:
 
 	void handle_connection(int socket_client) {
 		char buffer[1024];
-		int bytes_received = recv(socket_client, buffer, 1024, 0);
-		if(bytes_received <= 0) {
-			return;
+		memset(buffer, 0, sizeof(buffer));
+		while(true) {
+			int bytes_received = recv(socket_client, buffer, sizeof(buffer), 0);
+			if(bytes_received <= 0) {
+				close(socket_client);
+				continue;
+			}
+			std::string response = "+PONG\r\n";
+			send(socket_client, response.c_str(), response.size(), 0);
 		}
-		std::string response = "+PONG\r\n";
-		send(socket_client, response.c_str(), response.size(), 0);
 		close(socket_client);
 	}
 };
